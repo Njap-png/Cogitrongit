@@ -30,6 +30,7 @@ from core.updater import SelfUpdater, CodeEditor
 from core.youtube import VideoLearning, YouTubeExtractor, YouTubeVideo
 from core.video_learner import VideoLearner
 from core.sandbox import Sandbox, quick_execute, temporary_sandbox
+from core.agents import AgentOrchestrator, AutonomousAgent, CodeGenerator, Task
 from tools.decoder import Decoder
 from tools.web_search import WebSearch
 from tools.web_crawler import WebCrawler
@@ -87,6 +88,9 @@ class PhantomApp:
         
         # Code sandbox
         self.sandbox = Sandbox()
+        
+        # Autonomous agent system
+        self.orchestrator = AgentOrchestrator(self.config)
 
         self.decoder = Decoder()
         self.searcher = WebSearch(self.config)
@@ -329,23 +333,20 @@ class PhantomApp:
         elif cmd == "/yt":
             await self._cmd_yt(args)
 
-        elif cmd == "/watch":
+elif cmd == "/watch":
             await self._cmd_watch(args)
 
-        elif cmd == "/run":
-            await self._cmd_run(args)
+        elif cmd == "/do":
+            await self._cmd_do(args)
 
-        elif cmd == "/update":
-            await self._cmd_update(args)
+        elif cmd == "/generate":
+            await self._cmd_generate(args)
 
-        elif cmd == "/patch":
-            await self._cmd_patch(args)
+        elif cmd == "/research":
+            await self._cmd_research(args)
 
-        elif cmd == "/info":
-            self._cmd_info(args)
-
-        elif cmd == "/exec":
-            await self._cmd_exec(args)
+        elif cmd == "/capabilities":
+            self._cmd_capabilities()
 
         else:
             self.console.print(f"[yellow]Unknown command: {cmd}[/yellow]")
@@ -1097,6 +1098,125 @@ class PhantomApp:
             self.youtube.add_video(args)
         else:
             self.console.print("[red]Video not found[/red]")
+
+    async def _cmd_do(self, args: str) -> None:
+        """Autonomous task execution."""
+        if not args:
+            self.console.print("[yellow]Usage: /do <objective>[/yellow]")
+            return
+
+        self.console.print(f"[cyan]Planning:[/cyan] {args}")
+
+        result = await self.orchestrator.complete_objective(args)
+
+        tasks_planned = result.get("tasks_planned", 0)
+        tasks_completed = result.get("tasks_completed", 0)
+
+        self.console.print(Panel(
+            f"**Tasks Planned:** {tasks_planned}\n"
+            f"**Tasks Completed:** {tasks_completed}\n\n"
+            f"**Output:**\n{result.get('combined_output', '')[:1000]}",
+            title="Objective Complete",
+            border_style="green"
+        ))
+
+        for task_result in result.get("results", []):
+            if task_result["success"]:
+                self.console.print(f"[green]✓[/green] {task_result['task'][:60]}")
+            else:
+                self.console.print(f"[red]✗[/red] {task_result['task'][:60]}")
+
+    async def _cmd_generate(self, args: str) -> None:
+        """Generate code."""
+        parts = args.split(None, 2)
+        if len(parts) < 2:
+            self.console.print("[yellow]Usage: /generate <language> <description>[/yellow]")
+            return
+
+        language = parts[0].lower()
+        description = parts[1]
+
+        self.console.print(f"[cyan]Generating {language} code...[/cyan]")
+
+        code_gen = CodeGenerator(self.llm)
+        code = await code_gen.generate(description, language)
+
+        self.console.print(Panel(
+            f"[green]Generated Code:[/green]\n```\n{code[:500]}\n```" if len(code) > 500 else f"[green]Generated Code:[/green]\n```\n{code}\n```",
+            title=f"{language.title()} Code",
+            border_style="green"
+        ))
+
+        self.console.print("\n[cyan]Save to file? (y/n):[/cyan] ", end="")
+        save = self.console.input()
+        if save.lower() == "y":
+            self.console.print("[cyan]File path:[/cyan] ", end="")
+            path = self.console.input()
+            if path:
+                self.code_editor.write_file(path, code)
+                self.console.print(f"[green]Saved to {path}[/green]")
+
+    async def _cmd_research(self, args: str) -> None:
+        """Research a topic."""
+        parts = args.split()
+        depth = "medium"
+        topic = args
+
+        if parts and parts[0].lower() in ["shallow", "medium", "deep", "paranoid"]:
+            depth = parts[0].lower()
+            topic = " ".join(parts[1:])
+
+        if not topic:
+            self.console.print("[yellow]Usage: /research <topic> [depth][[/yellow]")
+            return
+
+        self.console.print(f"[cyan]Researching:[/cyan] {topic}")
+
+        from core.agents import ResearchAgent
+        research = ResearchAgent(self.llm)
+        result = await research.research(topic, depth)
+
+        self.console.print(Panel(
+            f"**Depth:** {result['depth']}\n"
+            f"**Sources:** {result['sources_count']}\n\n"
+            f"{result['report'][:2000]}",
+            title=f"Research: {topic}",
+            border_style="green"
+        ))
+
+    def _cmd_capabilities(self) -> None:
+        """Show all PHANTOM capabilities."""
+        capabilities = self.orchestrator.get_status()
+
+        table = Table(title="PHANTOM Capabilities")
+        table.add_column("Capability", style="cyan")
+        table.add_column("Description", style="green")
+        table.add_column("Commands", style="yellow")
+
+        caps = [
+            ("Shell", "Execute shell commands", "/bash, /cli, /shell"),
+            ("Web Search", "Search the web", "/search, /yt search"),
+            ("Code", "Run and generate code", "/run, /exec, /generate"),
+            ("File Edit", "Edit files", "/edit, /patch, /write"),
+            ("YouTube", "Video learning", "/yt, /watch, /video"),
+            ("Knowledge", "Learn from interactions", "/learn, /kb, /knowledge"),
+            ("Self-Update", "Modify itself", "/update, /verify"),
+            ("Task Planning", "Autonomous task completion", "/do"),
+            ("Research", "Deep topic research", "/research"),
+        ]
+
+        for cap in caps:
+            table.add_row(*cap)
+
+        self.console.print(table)
+
+        status_text = f"""**Status:**
+- Tasks Queue: {capabilities['tasks_queue']}
+- Tasks Completed: {capabilities['tasks_completed']}
+- Thinking Mode: {self.current_mode.upper()}
+- LLM Backend: {self.llm.backend}/{self.llm.model}"""
+
+        self.console.print(Panel(status_text, title="PHANTOM Status"))
 
     async def _cmd_run(self, args: str) -> None:
         """Run code in sandbox."""
