@@ -11,6 +11,9 @@ from core.llm import LLMBackend
 from core.thinking import ThinkingController, ThinkingResult
 from core.memory import ConversationMemory
 from core.evolution import EvolutionEngine
+from core.soul import Soul, PersonalityCore, Emotion, Manner
+from core.learner import Learner, SelfLearning, LearnedConcept
+from core.cli import CLI, CommandRunner, FileEditor, CommandResult
 from tools.knowledge_base import KnowledgeBase
 from tools.decoder import Decoder
 from tools.web_search import WebSearch
@@ -24,6 +27,17 @@ __all__ = [
     "ThinkingResult",
     "ConversationMemory",
     "EvolutionEngine",
+    "Soul",
+    "PersonalityCore",
+    "Emotion",
+    "Manner",
+    "Learner",
+    "SelfLearning",
+    "LearnedConcept",
+    "CLI",
+    "CommandRunner",
+    "FileEditor",
+    "CommandResult",
     "KnowledgeBase",
     "Decoder",
     "WebSearch",

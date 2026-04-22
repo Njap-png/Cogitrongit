@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any
 from rich.console import Console
 from rich.panel import Panel
 from rich.live import Live
+from rich.syntax import Syntax
 import click
 
 from core.config import Config, detect_platform
@@ -22,6 +23,9 @@ from core.thinking import ThinkingController, ThinkingResult
 from core.memory import ConversationMemory
 from core.evolution import EvolutionEngine
 from core.session import SessionManager
+from core.soul import Soul, PersonalityCore, Emotion
+from core.learner import Learner, SelfLearning
+from core.cli import CLI, CommandRunner, FileEditor
 from tools.decoder import Decoder
 from tools.web_search import WebSearch
 from tools.web_crawler import WebCrawler
@@ -40,10 +44,10 @@ logger = logging.getLogger("phantom")
 
 
 class PhantomApp:
-    """Main PHANTOM application."""
+    """Main PHANTOM application with soul and self-learning."""
 
     def __init__(self, config: Optional[Config] = None):
-        """Initialize PHANTOM."""
+        """Initialize PHANTOM with consciousness."""
         self.config = config or Config.get_instance()
         self.console = Console()
         self.platform = detect_platform()
@@ -56,6 +60,15 @@ class PhantomApp:
         )
         self.kb = KnowledgeBase(self.config)
         self.session_manager = SessionManager(self.config)
+
+        # PHANTOM's soul - personality and emotions
+        self.soul = Soul(self.config)
+        
+        # Self-learning engine
+        self.learner = Learner(self.config, self.memory, self.llm)
+        
+        # Full CLI capabilities
+        self.cli = CLI(self.config)
 
         self.decoder = Decoder()
         self.searcher = WebSearch(self.config)
@@ -108,7 +121,7 @@ class PhantomApp:
                 logger.error(f"REPL error: {e}", exc_info=True)
 
     def _startup(self) -> None:
-        """Run startup sequence."""
+        """Run startup sequence with soul."""
         self._check_dependencies()
 
         backends = self.llm.detect_available_backends()
@@ -122,9 +135,22 @@ class PhantomApp:
 
         kb_stats = self.kb.stats()
         evolution_count = self.evolution.cycle_count
+        learner_stats = self.learner.get_knowledge_stats()
 
         self.splash.render(
             backend=self.llm.backend,
+            model=self.llm.model,
+            search_engine=self.config.web.search_engine,
+            kb_count=kb_stats.get("total_entries", 0),
+            evolution_count=evolution_count,
+        )
+
+        self.console.print(f"\n[dim]{self.soul.get_greeting()}[/dim]")
+        
+        concepts = learner_stats.get("total_concepts", 0)
+        skills = learner_stats.get("skills_learned", 0)
+        if concepts > 0 or skills > 0:
+            self.console.print(f"[cyan]Knowledge: {concepts} concepts | Skills: {skills} learned[/cyan]")
             model=self.llm.model,
             search_engine=self.config.web.search_engine,
             kb_count=kb_stats.get("total_entries", 0),
@@ -254,6 +280,30 @@ class PhantomApp:
 
         elif cmd == "/export":
             await self._cmd_export(args)
+
+        elif cmd == "/soul":
+            self._cmd_soul(args)
+
+        elif cmd == "/learn":
+            await self._cmd_learn_cmd(args)
+
+        elif cmd == "/cli":
+            await self._cmd_cli(args)
+
+        elif cmd == "/edit":
+            await self._cmd_edit(args)
+
+        elif cmd == "/bash" or cmd == "/shell":
+            await self._cmd_shell(args)
+
+        elif cmd == "/skills":
+            self._cmd_skills()
+
+        elif cmd == "/knowledge":
+            self._cmd_knowledge(args)
+
+        elif cmd == "/persona":
+            self._cmd_persona()
 
         else:
             self.console.print(f"[yellow]Unknown command: {cmd}[/yellow]")
@@ -692,10 +742,148 @@ class PhantomApp:
         else:
             self.console.print("[yellow]Usage: /export session|kb [path][/yellow]")
 
+    def _cmd_soul(self, args: str) -> None:
+        """Show PHANTOM's soul and personality."""
+        args = args.lower().strip()
+
+        if args == "greet":
+            self.console.print(f"[green]{self.soul.get_greeting()}[/green]")
+        elif args == "insult":
+            self.console.print(f"[red]{self.soul.get_insult()}[/red]")
+        elif args == "state":
+            self.console.print(f"[cyan]Current state: {self.soul.state}[/cyan]")
+            self.console.print(f"[cyan]Emotion: {self.soul.personality.primary_emotion.value}[/cyan]")
+        else:
+            self.console.print(Panel(
+                f"**Name:** {self.soul.personality.name}\n"
+                f"**Codename:** {self.soul.personality.codename}\n"
+                f"**Tagline:** {self.soul.personality.tagline}\n\n"
+                f"**Curiosity:** {self.soul.personality.curiosity:.0%}\n"
+                f"**Thoroughness:** {self.soul.personality.thoroughness:.0%}\n"
+                f"**Helpfulness:** {self.soul.personality.helpfulness:.0%}\n\n"
+                f"**Total Queries:** {self.soul.personality.total_queries}\n"
+                f"**Sessions:** {self.soul.personality.session_count}",
+                title="PHANTOM Soul",
+                border_style="green"
+            ))
+
+    async def _cmd_learn_cmd(self, args: str) -> None:
+        """Learn from URL or topic."""
+        if not args:
+            self.console.print("[yellow]Usage: /learn <url-or-topic>[/yellow]")
+            return
+
+        if args.startswith("http"):
+            result = self.evolution.learn_from_url(args)
+        else:
+            result = self.evolution.learn_from_search(args)
+
+        self.console.print(f"[green]{result.learned}[/green]")
+        self.console.print(f"[dim]Entries added: {result.entries_added}[/dim]")
+
+    async def _cmd_cli(self, args: str) -> None:
+        """Execute CLI command."""
+        if not args:
+            self.console.print("[yellow]Usage: /cli <command>[/yellow]")
+            return
+
+        result = self.cli.parse_and_execute(args)
+
+        if result.success:
+            if result.output:
+                self.console.print(result.output)
+        else:
+            self.console.print(f"[red]Error: {result.error}[/red]")
+
+        self.console.print(f"[dim]Exit code: {result.exit_code} | Time: {result.execution_time:.2f}s[/dim]")
+
+    async def _cmd_edit(self, args: str) -> None:
+        """Edit files."""
+        parts = args.split(None, 2)
+        if len(parts) < 2:
+            self.console.print("[yellow]Usage: /edit <file> <content>[/yellow]")
+            return
+
+        file_path = parts[0]
+        content = parts[1] if len(parts) > 1 else ""
+
+        success = self.cli.editor.write_file(file_path, content)
+        if success:
+            self.console.print(f"[green]Written to {file_path}[/green]")
+        else:
+            self.console.print(f"[red]Failed to write to {file_path}[/red]")
+
+    async def _cmd_shell(self, args: str) -> None:
+        """Run shell command."""
+        if not args:
+            self.console.print("[yellow]Usage: /bash <command>[/yellow]")
+            return
+
+        result = self.cli.runner.run(args)
+
+        if result.output:
+            self.console.print(Syntax(result.output, "bash", line_numbers=True))
+        if result.error:
+            self.console.print(f"[red]{result.error}[/red]")
+
+        self.console.print(f"[dim]Exit: {result.exit_code} | {result.execution_time:.2f}s[/dim]")
+
+    def _cmd_skills(self) -> None:
+        """Show skill progress."""
+        skills = self.learner.get_all_skills()
+
+        table = Table(title="PHANTOM Skill Tree")
+        table.add_column("Skill", style="cyan")
+        table.add_column("Level", style="green")
+        table.add_column("XP", style="yellow")
+        table.add_column("Status")
+
+        for name, skill in sorted(skills.items(), key=lambda x: x[1].level, reverse=True):
+            if skill.level > 0:
+                status = "[green]Mastered[/green]" if skill.mastered else "[cyan]Learning[/cyan]"
+                table.add_row(name, str(skill.level), str(skill.experience_points), status)
+
+        self.console.print(table)
+
+    def _cmd_knowledge(self, args: str) -> None:
+        """Search learned knowledge."""
+        if not args:
+            stats = self.learner.get_knowledge_stats()
+            self.console.print(Panel(
+                f"**Total Concepts:** {stats.get('total_concepts', 0)}\n"
+                f"**Skills Learned:** {stats.get('skills_learned', 0)}",
+                title="Knowledge Stats",
+                border_style="green"
+            ))
+            return
+
+        concepts = self.learner.search_knowledge(args, top_k=5)
+
+        if not concepts:
+            self.console.print(f"[yellow]No knowledge found for: {args}[/yellow]")
+            return
+
+        for concept in concepts:
+            self.console.print(Panel(
+                f"**Confidence:** {concept.confidence:.0%}\n"
+                f"**Source:** {concept.source_type}\n"
+                f"**Learned:** {concept.learned_at[:10]}\n"
+                f"**Accessed:** {concept.access_count}x\n\n"
+                f"{concept.key_facts[0] if concept.key_facts else 'No details'}",
+                title=concept.topic,
+                border_style="green"
+            ))
+
+    def _cmd_persona(self) -> None:
+        """Show current persona."""
+        persona = self.soul.get_persona_prompt()
+        self.console.print(Panel(persona, title="PHANTOM Persona", border_style="green"))
+
     def _quit(self) -> None:
         """Exit PHANTOM."""
         self.memory.save(self._session_id)
-        self.console.print("[green]Session saved. Goodbye![/green]")
+        self.soul.save_personality()
+        self.console.print(f"[green]{self.soul.get_farewell()}[/green]")
         self._running = False
 
 
