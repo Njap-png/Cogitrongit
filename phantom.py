@@ -1,0 +1,717 @@
+#!/usr/bin/env python3
+"""PHANTOM - Polymorphic Heuristic AI for Network Threat Analysis & Mentoring.
+
+Main entry point and interactive REPL.
+"""
+
+import asyncio
+import logging
+import os
+import sys
+import uuid
+from pathlib import Path
+from typing import Optional, Dict, Any
+from rich.console import Console
+from rich.panel import Panel
+from rich.live import Live
+import click
+
+from core.config import Config, detect_platform
+from core.llm import LLMBackend
+from core.thinking import ThinkingController, ThinkingResult
+from core.memory import ConversationMemory
+from core.evolution import EvolutionEngine
+from core.session import SessionManager
+from tools.decoder import Decoder
+from tools.web_search import WebSearch
+from tools.web_crawler import WebCrawler
+from tools.web_viewer import WebViewer
+from tools.knowledge_base import KnowledgeBase
+from agents.orchestrator import Orchestrator
+from ui.splash import Splash, MiniSplash
+from ui.terminal import Terminal, create_help_table
+from ui.themes import get_theme, THEMES
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger("phantom")
+
+
+class PhantomApp:
+    """Main PHANTOM application."""
+
+    def __init__(self, config: Optional[Config] = None):
+        """Initialize PHANTOM."""
+        self.config = config or Config.get_instance()
+        self.console = Console()
+        self.platform = detect_platform()
+
+        self.llm = LLMBackend(self.config)
+        self.memory = ConversationMemory(self.config)
+        self.thinking = ThinkingController(self.llm, self.config)
+        self.evolution = EvolutionEngine(
+            self.config, self.memory, self.llm
+        )
+        self.kb = KnowledgeBase(self.config)
+        self.session_manager = SessionManager(self.config)
+
+        self.decoder = Decoder()
+        self.searcher = WebSearch(self.config)
+        self.crawler = WebCrawler(self.config)
+        self.viewer = WebViewer(self.crawler)
+
+        self.orchestrator = Orchestrator(
+            self.config, self.llm, self.memory, self.thinking
+        )
+
+        self.splash = Splash(self.config)
+        self.terminal = Terminal(self.config.ui.theme)
+
+        self.current_mode = self.config.thinking.default_mode
+        self._running = True
+        self._session_id = str(uuid.uuid4())[:8]
+
+        self._init_platform()
+
+    def _init_platform(self) -> None:
+        """Initialize platform-specific settings."""
+        if sys.version_info < (3, 8):
+            self.console.print(
+                "[yellow]Warning: Python 3.8+ recommended. Some features may not work.[/yellow]"
+            )
+        elif sys.version_info < (3, 6):
+            self.console.print(
+                "[red]Error: Python 3.6+ required.[/red]"
+            )
+            sys.exit(1)
+
+    def run(self) -> None:
+        """Run the PHANTOM REPL."""
+        self._startup()
+
+        while self._running:
+            try:
+                user_input = self._get_input()
+                if not user_input:
+                    continue
+
+                asyncio.run(self._process_input(user_input))
+
+            except KeyboardInterrupt:
+                self.console.print("\n[dim]Use /quit to exit[/dim]")
+            except EOFError:
+                self._quit()
+            except Exception as e:
+                self.console.print(f"[red]Error: {e}[/red]")
+                logger.error(f"REPL error: {e}", exc_info=True)
+
+    def _startup(self) -> None:
+        """Run startup sequence."""
+        self._check_dependencies()
+
+        backends = self.llm.detect_available_backends()
+        if backends:
+            selected = self.llm.auto_select_backend()
+            logger.info(f"Selected backend: {selected}")
+        else:
+            logger.warning("No LLM backend available")
+
+        self.memory.load_latest_session()
+
+        kb_stats = self.kb.stats()
+        evolution_count = self.evolution.cycle_count
+
+        self.splash.render(
+            backend=self.llm.backend,
+            model=self.llm.model,
+            search_engine=self.config.web.search_engine,
+            kb_count=kb_stats.get("total_entries", 0),
+            evolution_count=evolution_count,
+        )
+
+        if self.config.evolution.evolve_on_startup:
+            self.console.print("[cyan]Running startup evolution...[/cyan]")
+            report = self.evolution.run_evolution_cycle()
+            self.console.print(
+                f"[green]Evolution complete: {report.entries_added} entries added[/green]"
+            )
+
+    def _check_dependencies(self) -> None:
+        """Check for missing dependencies."""
+        missing = []
+
+        try:
+            import rich
+        except ImportError:
+            missing.append("rich")
+
+        try:
+            import requests
+        except ImportError:
+            missing.append("requests")
+
+        try:
+            import beautifulsoup4
+        except ImportError:
+            missing.append("beautifulsoup4")
+
+        if missing:
+            self.console.print(
+                f"[yellow]Missing dependencies: {', '.join(missing)}[/yellow]"
+            )
+            self.console.print(
+                "[yellow]Run: pip install -r requirements.txt[/yellow]"
+            )
+
+    def _get_input(self) -> str:
+        """Get user input."""
+        prompt = "[bold green]PHANTOM[/bold green]▶ "
+        return self.console.input(prompt).strip()
+
+    async def _process_input(self, user_input: str) -> None:
+        """Process user input."""
+        if not user_input:
+            return
+
+        if user_input.startswith("/"):
+            await self._process_command(user_input)
+        else:
+            await self._process_query(user_input)
+
+    async def _process_command(self, command: str) -> None:
+        """Process slash command."""
+        parts = command.split(None, 2)
+        cmd = parts[0].lower()
+        args = " ".join(parts[1:]) if len(parts) > 1 else ""
+
+        if cmd == "/quit" or cmd == "/exit":
+            self._quit()
+
+        elif cmd == "/help":
+            self._show_help(args)
+
+        elif cmd == "/clear":
+            self.splash.render_mini(
+                engines=5,
+                kb_entries=self.kb.stats().get("total_entries", 0)
+            )
+
+        elif cmd == "/search":
+            await self._cmd_search(args)
+
+        elif cmd == "/read":
+            await self._cmd_read(args)
+
+        elif cmd == "/crawl":
+            await self._cmd_crawl(args)
+
+        elif cmd == "/browse":
+            await self._cmd_browse(args)
+
+        elif cmd == "/headers":
+            await self._cmd_headers(args)
+
+        elif cmd == "/decode":
+            await self._cmd_decode(args)
+
+        elif cmd == "/encode":
+            await self._cmd_encode(args)
+
+        elif cmd == "/hash":
+            await self._cmd_hash(args)
+
+        elif cmd == "/cve":
+            await self._cmd_cve(args)
+
+        elif cmd == "/think":
+            await self._cmd_think(args)
+
+        elif cmd == "/learn":
+            await self._cmd_learn(args)
+
+        elif cmd == "/evolve":
+            await self._cmd_evolve()
+
+        elif cmd == "/kb":
+            await self._cmd_kb(args)
+
+        elif cmd == "/model":
+            await self._cmd_model(args)
+
+        elif cmd == "/session":
+            await self._cmd_session(args)
+
+        elif cmd == "/theme":
+            await self._cmd_theme(args)
+
+        elif cmd == "/stats":
+            self._show_stats()
+
+        elif cmd == "/history":
+            await self._cmd_history(args)
+
+        elif cmd == "/export":
+            await self._cmd_export(args)
+
+        else:
+            self.console.print(f"[yellow]Unknown command: {cmd}[/yellow]")
+            self.console.print("[cyan]Type /help for available commands[/cyan]")
+
+    async def _process_query(self, query: str) -> None:
+        """Process natural language query."""
+        self.memory.add("user", query)
+
+        kb_results = self.kb.search(query, top_k=3)
+        context = ""
+        if kb_results:
+            context = "\n".join([
+                f"- {r.title}: {r.content[:200]}"
+                for r in kb_results
+            ])
+
+        history = self.memory.get_window(max_tokens=1000)
+        if history:
+            context += "\n\nRecent context:\n" + "\n".join([
+                f"[{m['role']}]: {m['content'][:100]}..."
+                for m in history[-5:]
+            ])
+
+        with Live(
+            Panel(
+                "[cyan]PHANTOM is thinking...[/cyan]",
+                border_style="green",
+                title=f"◈ PHANTOM [{self.current_mode.upper()} MODE]"
+            ),
+            console=self.console,
+            refresh_per_second=4,
+        ) as live:
+            result = await self.thinking.think(
+                query,
+                context=context or None,
+                mode=self.current_mode
+            )
+
+        live.update(
+            Panel(
+                result.final_answer or "[dim]No response generated[/dim]",
+                border_style="green",
+                title=f"◈ PHANTOM [{self.current_mode.upper()} MODE]",
+            )
+        )
+
+        if self.config.thinking.show_engine_outputs:
+            self.thinking.show_thinking_process(result)
+
+        self.console.print()
+        self.console.print(
+            f"[dim]Confidence: {result.confidence_level} | "
+            f"Time: {result.thinking_time_seconds:.2f}s[/dim]"
+        )
+
+        if result.auto_search_suggestions:
+            self.console.print("[yellow]PHANTOM suggests:[/yellow]")
+            for suggestion in result.auto_search_suggestions:
+                self.console.print(f"  • /search {suggestion}")
+
+        self.memory.add("assistant", result.final_answer, {
+            "thinking_mode": result.mode,
+        })
+
+        if self.config.evolution.auto_learn:
+            self.evolution.extract_and_store(result.final_answer, query)
+
+    def _show_help(self, topic: str) -> None:
+        """Show help."""
+        if topic:
+            self.console.print(f"[cyan]Help for: {topic}[/cyan]")
+        else:
+            table = create_help_table()
+            self.console.print(table)
+
+    def _show_stats(self) -> None:
+        """Show statistics."""
+        kb_stats = self.kb.stats()
+
+        stats_text = f"""## Statistics
+
+**Session:** {self._session_id}
+**Mode:** {self.current_mode.upper()}
+**Platform:** {self.platform.upper()}
+
+**LLM Backend:** {self.llm.backend} / {self.llm.model}
+
+**Knowledge Base:**
+- Total entries: {kb_stats.get('total_entries', 0)}
+- Categories: {len(kb_stats.get('by_category', {}))}
+- Size: {kb_stats.get('total_size_kb', 0)} KB
+
+**Evolution:**
+- Cycle: {self.evolution.cycle_count}
+- Knowledge gaps: {len(self.evolution.get_unresolved_gaps())}
+
+**Messages:** {len(self.memory.messages)}"""
+
+        self.console.print(Panel(stats_text, title="Statistics", border_style="green"))
+
+    async def _cmd_search(self, args: str) -> None:
+        """Search the web."""
+        if not args:
+            self.console.print("[yellow]Usage: /search <query>[/yellow]")
+            return
+
+        results = self.searcher.search(args, max_results=10)
+        self.searcher.display_results(results)
+
+        self.console.print(f"\n[cyan]Open any result? [1-{len(results)} / n][/cyan]")
+        choice = self.console.input("> ").strip()
+
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(results):
+                await self._cmd_read(results[idx].url)
+
+    async def _cmd_read(self, url: str) -> None:
+        """Read a URL."""
+        if not url:
+            self.console.print("[yellow]Usage: /read <url>[/yellow]")
+            return
+
+        if not url.startswith("http"):
+            url = "https://" + url
+
+        page = self.crawler.fetch_page(url)
+        if page:
+            self.viewer.render(page)
+        else:
+            self.console.print("[red]Failed to fetch page[/red]")
+
+    async def _cmd_crawl(self, args: str) -> None:
+        """Crawl a website."""
+        if not args:
+            self.console.print("[yellow]Usage: /crawl <url> [--depth N] [--pages N][/yellow]")
+            return
+
+        parts = args.split()
+        url = parts[0]
+
+        max_depth = 3
+        max_pages = 20
+
+        for i, part in enumerate(parts[1:]):
+            if part == "--depth" and i + 1 < len(parts):
+                max_depth = int(parts[i + 2])
+            elif part == "--pages" and i + 1 < len(parts):
+                max_pages = int(parts[i + 2])
+
+        sitemap = self.crawler.crawl_site(url, max_pages=max_pages, max_depth=max_depth)
+        self.viewer.render_sitemap(sitemap)
+
+    async def _cmd_browse(self, url: str) -> None:
+        """Interactive browser."""
+        if not url:
+            self.console.print("[yellow]Usage: /browse <url>[/yellow]")
+            return
+
+        if not url.startswith("http"):
+            url = "https://" + url
+
+        self.viewer.browse(url)
+
+    async def _cmd_headers(self, url: str) -> None:
+        """Analyze security headers."""
+        if not url:
+            self.console.print("[yellow]Usage: /headers <url>[/yellow]")
+            return
+
+        page = self.crawler.fetch_page(url)
+        if page:
+            self.viewer.render_security_headers(page.security_headers)
+
+    async def _cmd_decode(self, data: str) -> None:
+        """Decode data."""
+        if not data:
+            self.console.print("[yellow]Usage: /decode <data>[/yellow]")
+            return
+
+        result = self.decoder.auto_decode(data, verbose=True)
+
+        output = f"**Original:**\n```\n{result.original[:100]}\n```\n\n"
+        output += f"**Decoded ({result.total_layers} layers):**\n```\n{result.final}\n```"
+
+        self.console.print(Panel(output, title="Decode Result", border_style="green"))
+
+    async def _cmd_encode(self, args: str) -> None:
+        """Encode data."""
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            self.console.print("[yellow]Usage: /encode <format> <data>[/yellow]")
+            return
+
+        format_type = parts[0].lower()
+        data = parts[1]
+
+        method_name = f"encode_{format_type}"
+        method = getattr(self.decoder, method_name, None)
+
+        if not method:
+            self.console.print(f"[yellow]Unknown format: {format_type}[/yellow]")
+            return
+
+        try:
+            result = method(data)
+            self.console.print(
+                Panel(f"**{format_type.upper()}:**\n```\n{result}\n```", border_style="green")
+            )
+        except Exception as e:
+            self.console.print(f"[red]Encoding failed: {e}[/red]")
+
+    async def _cmd_hash(self, args: str) -> None:
+        """Generate hashes."""
+        if not args:
+            self.console.print("[yellow]Usage: /hash <data>[/yellow]")
+            return
+
+        hashes = self.decoder.hash_all(args)
+
+        output = ""
+        for hash_type, hash_value in hashes.items():
+            output += f"**{hash_type.upper()}:** `{hash_value}`\n"
+
+        self.console.print(Panel(output, title="Hashes", border_style="green"))
+
+    async def _cmd_cve(self, cve_id: str) -> None:
+        """Lookup CVE."""
+        if not cve_id:
+            self.console.print("[yellow]Usage: /cve <CVE-ID>[/yellow]")
+            return
+
+        cve = self.searcher.search_cve(cve_id)
+
+        if not cve:
+            self.console.print(f"[yellow]CVE {cve_id} not found[/yellow]")
+            return
+
+        output = f"## {cve.cve_id}\n\n"
+        output += f"**Severity:** {cve.severity}\n"
+        if cve.cvss_score:
+            output += f"**CVSS Score:** {cve.cvss_score}\n"
+        output += f"**Published:** {cve.published}\n\n"
+        output += f"### Description\n\n{cve.description}\n"
+
+        self.console.print(Panel(output, border_style="green"))
+
+    async def _cmd_think(self, args: str) -> None:
+        """Set or show thinking mode."""
+        args = args.lower().strip()
+
+        if args == "show":
+            last = self.memory.messages[-1] if self.memory.messages else None
+            if last and last.role == "assistant":
+                self.console.print("[cyan]Showing last thinking process...[/cyan]")
+            else:
+                self.console.print("[dim]No thinking process to show[/dim]")
+        elif args in ("fast", "deep", "paranoid"):
+            self.current_mode = args
+            self.console.print(f"[green]Thinking mode set to: {args}[/green]")
+        else:
+            self.console.print(f"[cyan]Current mode: {self.current_mode.upper()}[/cyan]")
+            self.console.print("[dim]Use: /think fast|deep|paranoid|show[/dim]")
+
+    async def _cmd_learn(self, args: str) -> None:
+        """Learn from URL or topic."""
+        if not args:
+            self.console.print("[yellow]Usage: /learn <url-or-topic>[/yellow]")
+            return
+
+        if args.startswith("http"):
+            result = self.evolution.learn_from_url(args)
+        else:
+            result = self.evolution.learn_from_search(args)
+
+        self.console.print(f"[green]{result.learned}[/green]")
+        self.console.print(f"[dim]Entries added: {result.entries_added}[/dim]")
+
+    async def _cmd_evolve(self) -> None:
+        """Run evolution cycle."""
+        self.console.print("[cyan]Running evolution cycle...[/cyan]")
+        report = self.evolution.run_evolution_cycle()
+
+        self.console.print(Panel(
+            f"**Gaps found:** {report.gaps_found}\n"
+            f"**Searches run:** {report.searches_run}\n"
+            f"**Entries added:** {report.entries_added}\n"
+            f"**KB size:** {report.kb_size_before} → {report.kb_size_after}",
+            title=f"Evolution Cycle #{report.cycle_number}",
+            border_style="green",
+        ))
+
+    async def _cmd_kb(self, args: str) -> None:
+        """Knowledge base commands."""
+        parts = args.split(None, 1)
+        cmd = parts[0].lower() if parts else "list"
+        query = parts[1] if len(parts) > 1 else ""
+
+        if cmd == "search":
+            if not query:
+                self.console.print("[yellow]Usage: /kb search <query>[/yellow]")
+                return
+            results = self.kb.search(query, top_k=10)
+            for r in results:
+                self.console.print(f"[cyan]•[/cyan] {r.title}")
+                self.console.print(f"  [dim]{r.content[:100]}...[/dim]")
+
+        elif cmd == "list":
+            stats = self.kb.stats()
+            self.console.print(f"**Total entries:** {stats['total_entries']}")
+            for cat, count in stats["by_category"].items():
+                self.console.print(f"  {cat}: {count}")
+
+        elif cmd == "stats":
+            stats = self.kb.stats()
+            self.console.print(Panel(str(stats), title="KB Stats"))
+
+        elif cmd == "export":
+            output_path = query or "knowledge.md"
+            self.kb.export_markdown(output_path)
+            self.console.print(f"[green]Exported to {output_path}[/green]")
+
+        else:
+            self.console.print("[cyan]/kb commands: search|list|stats|export[/cyan]")
+
+    async def _cmd_model(self, args: str) -> None:
+        """Model commands."""
+        parts = args.split(None, 1)
+        cmd = parts[0].lower() if parts else "list"
+
+        if cmd == "list":
+            models = self.llm.list_models()
+            self.console.print(f"**Current:** {self.llm.model}")
+            for m in models:
+                marker = "●" if m == self.llm.model else "○"
+                self.console.print(f"  {marker} {m}")
+
+        elif cmd == "set":
+            model = parts[1] if len(parts) > 1 else ""
+            if model and self.llm.switch_model(model):
+                self.console.print(f"[green]Model set to: {model}[/green]")
+            else:
+                self.console.print("[yellow]Failed to switch model[/yellow]")
+
+        else:
+            self.console.print(f"[cyan]Current: {self.llm.model}[/cyan]")
+            self.console.print("[cyan]/model commands: list|set <name>[/cyan]")
+
+    async def _cmd_session(self, args: str) -> None:
+        """Session commands."""
+        parts = args.split(None, 1)
+        cmd = parts[0].lower() if parts else "list"
+
+        if cmd == "list":
+            sessions = self.memory.list_sessions()
+            for s in sessions[:10]:
+                self.console.print(
+                    f"[cyan]{s['id']}[/cyan] - {s['date'][:10]} "
+                    f"({s['message_count']} messages)"
+                )
+
+        elif cmd == "load":
+            session_id = parts[1] if len(parts) > 1 else ""
+            if session_id and self.memory.load(session_id):
+                self.console.print(f"[green]Loaded session {session_id}[/green]")
+            else:
+                self.console.print("[yellow]Failed to load session[/yellow]")
+
+        elif cmd == "new":
+            self._session_id = self.memory.new_session()
+            self.console.print(f"[green]New session: {self._session_id}[/green]")
+
+        elif cmd == "save":
+            self._session_id = self.memory.save()
+            self.console.print(f"[green]Saved session: {self._session_id}[/green]")
+
+        else:
+            self.console.print(f"[cyan]Current: {self._session_id}[/cyan]")
+            self.console.print("[dim]/session list|load|new|save[/dim]")
+
+    async def _cmd_theme(self, args: str) -> None:
+        """Change theme."""
+        args = args.lower().strip()
+
+        if args in THEMES:
+            self.config.ui.theme = args
+            self.terminal = Terminal(args)
+            self.console.print(f"[green]Theme set to: {args}[/green]")
+        else:
+            available = ", ".join(THEMES.keys())
+            self.console.print(f"[cyan]Available themes: {available}[/cyan]")
+
+    async def _cmd_history(self, args: str) -> None:
+        """Search or show history."""
+        parts = args.split(None, 1)
+        cmd = parts[0].lower() if parts else "last"
+
+        if cmd == "search":
+            query = parts[1] if len(parts) > 1 else ""
+            if not query:
+                self.console.print("[yellow]Usage: /history search <query>[/yellow]")
+                return
+            results = self.memory.search(query)
+            for r in results:
+                self.console.print(f"[cyan]{r['role']}[/cyan]: {r['content'][:100]}...")
+
+        elif cmd == "last":
+            count = int(parts[1]) if len(parts) > 1 else 10
+            messages = self.memory.messages[-count:]
+            for m in messages:
+                role_style = "green" if m.role == "assistant" else "cyan"
+                self.console.print(f"[{role_style}]{m.role}[/{role_style}]: {m.content[:100]}...")
+
+        else:
+            messages = self.memory.messages[-10:]
+            for m in messages:
+                self.console.print(f"[cyan]{m.role}[/cyan]: {m.content[:100]}...")
+
+    async def _cmd_export(self, args: str) -> None:
+        """Export data."""
+        parts = args.split(None, 1)
+        export_type = parts[0].lower() if parts else "session"
+        output_path = parts[1] if len(parts) > 1 else ""
+
+        if export_type == "session":
+            path = output_path or f"session_{self._session_id}.md"
+            self.memory.save()
+            self.console.print(f"[green]Session saved[/green]")
+
+        elif export_type == "kb":
+            path = output_path or "knowledge.md"
+            self.kb.export_markdown(path)
+            self.console.print(f"[green]KB exported to {path}[/green]")
+
+        else:
+            self.console.print("[yellow]Usage: /export session|kb [path][/yellow]")
+
+    def _quit(self) -> None:
+        """Exit PHANTOM."""
+        self.memory.save(self._session_id)
+        self.console.print("[green]Session saved. Goodbye![/green]")
+        self._running = False
+
+
+def main():
+    """Main entry point."""
+    config = Config.get_instance()
+
+    try:
+        app = PhantomApp(config)
+        app.run()
+    except KeyboardInterrupt:
+        print("\n[dim]Exiting...[/dim]")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
