@@ -26,6 +26,9 @@ from core.session import SessionManager
 from core.soul import Soul, PersonalityCore, Emotion
 from core.learner import Learner, SelfLearning
 from core.cli import CLI, CommandRunner, FileEditor
+from core.updater import SelfUpdater, CodeEditor
+from core.video_learner import VideoLearner
+from core.sandbox import Sandbox, quick_execute, temporary_sandbox
 from tools.decoder import Decoder
 from tools.web_search import WebSearch
 from tools.web_crawler import WebCrawler
@@ -69,6 +72,16 @@ class PhantomApp:
         
         # Full CLI capabilities
         self.cli = CLI(self.config)
+        
+        # Self-update engine
+        self.updater = SelfUpdater(self.config)
+        self.code_editor = CodeEditor()
+        
+        # Video learning
+        self.video_learner = VideoLearner(self.config)
+        
+        # Code sandbox
+        self.sandbox = Sandbox()
 
         self.decoder = Decoder()
         self.searcher = WebSearch(self.config)
@@ -304,6 +317,24 @@ class PhantomApp:
 
         elif cmd == "/persona":
             self._cmd_persona()
+
+        elif cmd == "/video":
+            await self._cmd_video(args)
+
+        elif cmd == "/run":
+            await self._cmd_run(args)
+
+        elif cmd == "/update":
+            await self._cmd_update(args)
+
+        elif cmd == "/patch":
+            await self._cmd_patch(args)
+
+        elif cmd == "/info":
+            self._cmd_info(args)
+
+        elif cmd == "/exec":
+            await self._cmd_exec(args)
 
         else:
             self.console.print(f"[yellow]Unknown command: {cmd}[/yellow]")
@@ -878,6 +909,142 @@ class PhantomApp:
         """Show current persona."""
         persona = self.soul.get_persona_prompt()
         self.console.print(Panel(persona, title="PHANTOM Persona", border_style="green"))
+
+    async def _cmd_video(self, args: str) -> None:
+        """Video learning commands."""
+        parts = args.split(None, 2)
+        cmd = parts[0].lower() if parts else "list"
+
+        if cmd == "add":
+            if len(parts) < 3:
+                self.console.print("[yellow]Usage: /video add <url> <title>[/yellow]")
+                return
+            video = self.video_learner.add_video(parts[1], parts[2])
+            self.console.print(f"[green]Added: {video.title} from {video.platform}[/green]")
+
+        elif cmd == "list":
+            videos = list(self.video_learner._videos.values())
+            if not videos:
+                self.console.print("[yellow]No videos in library[/yellow]")
+                return
+            for v in videos:
+                status = "✓" if v.watched else "○"
+                self.console.print(f"[{status}] {v.title} ({v.platform})")
+
+        elif cmd == "stats":
+            stats = self.video_learner.get_library_stats()
+            self.console.print(Panel(
+                f"**Total:** {stats['total_videos']}\n"
+                f"**Watched:** {stats['watched']} ({stats['completion']})\n"
+                f"**Topics:** {stats['unique_topics']}",
+                title="Video Library",
+                border_style="green"
+            ))
+
+        else:
+            self.console.print("[cyan]/video add|list|stats <url> <title>[/cyan]")
+
+    async def _cmd_run(self, args: str) -> None:
+        """Run code in sandbox."""
+        parts = args.split(None, 2)
+        if len(parts) < 2:
+            self.console.print("[yellow]Usage: /run <language> <code>[/yellow]")
+            return
+
+        language = parts[0].lower()
+        code = parts[1]
+
+        result = self.sandbox.execute(code, language)
+
+        if result.success:
+            self.console.print(Panel(
+                f"[green]Output:[/green]\n{result.output[:500]}",
+                title=f"Execution Complete ({result.execution_time:.2f}s)"
+            ))
+        else:
+            self.console.print(f"[red]Error:[/red] {result.error}")
+
+    async def _cmd_update(self, args: str) -> None:
+        """Self-update commands."""
+        parts = args.split(None, 1)
+        cmd = parts[0].lower() if parts else "check"
+
+        if cmd == "check":
+            info = self.updater.check_for_updates()
+            self.console.print(Panel(
+                f"**Current:** {info['current_version']}\n"
+                f"**Up to date:** {info['up_to_date']}\n"
+                f"**Last checked:** {info['last_checked'][:10]}",
+                title="Update Status",
+                border_style="green"
+            ))
+
+        elif cmd == "verify":
+            verified = self.updater.verify_integrity()
+            if verified:
+                self.console.print("[green]Integrity verified[/green]")
+            else:
+                self.console.print("[red]Integrity check failed![/red]")
+
+        else:
+            self.console.print("[cyan]/update check|verify[/cyan]")
+
+    async def _cmd_patch(self, args: str) -> None:
+        """Apply patches to source."""
+        parts = args.split(None, 2)
+        if len(parts) < 3:
+            self.console.print("[yellow]Usage: /patch <file> <old> <new>[/yellow]")
+            return
+
+        file_path = parts[0]
+        old = parts[1]
+        new = parts[2]
+
+        success, count = self.code_editor.replace_in_file(file_path, old, new)
+        if success:
+            self.console.print(f"[green]Replaced {count}x in {file_path}[/green]")
+        else:
+            self.console.print(f"[red]Failed to patch {file_path}[/red]")
+
+    def _cmd_info(self, args: str) -> None:
+        """Show source file info."""
+        if not args:
+            self.console.print("[yellow]Usage: /info <module>[/yellow]")
+            return
+
+        info = self.updater.get_source_info(args)
+        if info:
+            self.console.print(Panel(
+                f"**Language:** {info['language']}\n"
+                f"**Lines:** {info['lines']}\n"
+                f"**Functions:** {len(info['functions'])}\n"
+                f"**Classes:** {len(info['classes'])}\n"
+                f"**Hash:** {info['hash'][:16]}...",
+                title=info["module"],
+                border_style="green"
+            ))
+        else:
+            self.console.print(f"[red]Module not found: {args}[/red]")
+
+    async def _cmd_exec(self, args: str) -> None:
+        """Execute file in sandbox."""
+        if not args:
+            self.console.print("[yellow]Usage: /exec <file> [language][/yellow]")
+            return
+
+        parts = args.split(None, 1)
+        file_path = parts[0]
+        language = parts[1].lower() if len(parts) > 1 else None
+
+        result = self.sandbox.execute_file(file_path, language)
+
+        if result.success:
+            self.console.print(Panel(
+                f"[green]{result.output[:500]}[/green]",
+                title=f"Ran in {result.execution_time:.2f}s"
+            ))
+        else:
+            self.console.print(f"[red]Error:[/red] {result.error}")
 
     def _quit(self) -> None:
         """Exit PHANTOM."""
