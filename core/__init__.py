@@ -1,6 +1,6 @@
 """PHANTOM - Polymorphic Heuristic AI for Network Threat Analysis & Mentoring"""
 
-__version__ = "2.0.2-OMEGA"
+__version__ = "2.0.3-OMEGA"
 __codename__ = "OMEGA-CORE"
 __author__ = "PHANTOM-CORE PROJECT"
 __license__ = "MIT"
@@ -16,6 +16,7 @@ from core.learner import Learner, SelfLearning, LearnedConcept
 from core.cli import CLI, CommandRunner, FileEditor, CommandResult
 from core.updater import SelfUpdater, CodeEditor, VersionManager, UpdateResult
 from core.video_learner import VideoLearner, VideoInfo, MediaSearchResult
+from core.youtube import YouTubeExtractor, YouTubeVideo, VideoLearning, VideoSearchResult as YouTubeSearchResult
 from core.sandbox import Sandbox, ExecutionResult, SandboxConfig, temporary_sandbox, quick_execute
 from tools.knowledge_base import KnowledgeBase
 from tools.decoder import Decoder
@@ -48,6 +49,10 @@ __all__ = [
     "VideoLearner",
     "VideoInfo",
     "MediaSearchResult",
+    "YouTubeExtractor",
+    "YouTubeVideo",
+    "VideoLearning",
+    "YouTubeSearchResult",
     "Sandbox",
     "ExecutionResult",
     "SandboxConfig",

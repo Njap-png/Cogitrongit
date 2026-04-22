@@ -27,6 +27,7 @@ from core.soul import Soul, PersonalityCore, Emotion
 from core.learner import Learner, SelfLearning
 from core.cli import CLI, CommandRunner, FileEditor
 from core.updater import SelfUpdater, CodeEditor
+from core.youtube import VideoLearning, YouTubeExtractor, YouTubeVideo
 from core.video_learner import VideoLearner
 from core.sandbox import Sandbox, quick_execute, temporary_sandbox
 from tools.decoder import Decoder
@@ -76,6 +77,10 @@ class PhantomApp:
         # Self-update engine
         self.updater = SelfUpdater(self.config)
         self.code_editor = CodeEditor()
+        
+        # YouTube integration
+        self.youtube = VideoLearning(self.config)
+        self.yt_extractor = YouTubeExtractor(self.config)
         
         # Video learning
         self.video_learner = VideoLearner(self.config)
@@ -320,6 +325,12 @@ class PhantomApp:
 
         elif cmd == "/video":
             await self._cmd_video(args)
+
+        elif cmd == "/yt":
+            await self._cmd_yt(args)
+
+        elif cmd == "/watch":
+            await self._cmd_watch(args)
 
         elif cmd == "/run":
             await self._cmd_run(args)
@@ -943,6 +954,149 @@ class PhantomApp:
 
         else:
             self.console.print("[cyan]/video add|list|stats <url> <title>[/cyan]")
+
+    async def _cmd_yt(self, args: str) -> None:
+        """YouTube commands."""
+        parts = args.split(None, 2)
+        cmd = parts[0].lower() if parts else "search"
+
+        if cmd == "search":
+            if len(parts) < 2:
+                self.console.print("[yellow]Usage: /yt search <query>[/yellow]")
+                return
+            results = self.youtube.search_youtube(parts[1], max_results=10)
+            if not results:
+                self.console.print("[yellow]No results found[/yellow]")
+                return
+            
+            table = Table(title=f"YouTube Search: {parts[1]}")
+            table.add_column("#", width=2, style="cyan")
+            table.add_column("Title", style="green")
+            table.add_column("Channel", style="yellow")
+            table.add_column("Duration", style="dim")
+            table.add_column("URL", style="blue")
+            
+            for i, r in enumerate(results, 1):
+                table.add_row(str(i), r.title[:50], r.channel[:20], r.duration, r.url[:40])
+            
+            self.console.print(table)
+
+        elif cmd == "info":
+            if len(parts) < 2:
+                self.console.print("[yellow]Usage: /yt info <url-or-id>[/yellow]")
+                return
+            video_id = self.yt_extractor.get_video_id(parts[1])
+            video = self.yt_extractor.get_video_info(video_id)
+            if not video:
+                self.console.print("[red]Video not found[/red]")
+                return
+            
+            self.console.print(Panel(
+                f"**Title:** {video.title}\n"
+                f"**Channel:** [{video.channel}](https://youtube.com/channel/{video.channel_id})\n"
+                f"**Duration:** {self.yt_extractor._format_duration(video.duration)}\n"
+                f"**Views:** {video.view_count:,}\n"
+                f"**Likes:** {video.like_count:,}\n"
+                f"**Uploaded:** {video.upload_date[:8] if video.upload_date else 'Unknown'}\n"
+                f"**Tags:** {', '.join(video.tags[:10]) if video.tags else 'None'}\n\n"
+                f"**Description:**\n{video.description[:500]}...",
+                title=f"▶ {video.title}",
+                border_style="green"
+            ))
+
+        elif cmd == "add":
+            if len(parts) < 2:
+                self.console.print("[yellow]Usage: /yt add <url>[/yellow]")
+                return
+            video = self.youtube.add_video(parts[1])
+            if video:
+                self.console.print(f"[green]Added: {video.title}[/green]")
+            else:
+                self.console.print("[red]Failed to add video[/red]")
+
+        elif cmd == "transcript":
+            if len(parts) < 2:
+                self.console.print("[yellow]Usage: /yt transcript <url-or-id>[/yellow]")
+                return
+            video_id = self.yt_extractor.get_video_id(parts[1])
+            transcript = self.yt_extractor.extract_transcript(video_id)
+            if transcript:
+                self.console.print(Panel(transcript[:3000], title="Transcript"))
+            else:
+                self.console.print("[yellow]No transcript available[/yellow]")
+
+        elif cmd == "chapters":
+            if len(parts) < 2:
+                self.console.print("[yellow]Usage: /yt chapters <url-or-id>[/yellow]")
+                return
+            video_id = self.yt_extractor.get_video_id(parts[1])
+            chapters = self.yt_extractor.extract_chapters(video_id)
+            if chapters:
+                for ch in chapters:
+                    ts = self.yt_extractor._format_duration(ch["start_time"])
+                    self.console.print(f"[cyan]{ts}[/cyan] - {ch['title']}")
+            else:
+                self.console.print("[yellow]No chapters found[/yellow]")
+
+        elif cmd == "learn":
+            if len(parts) < 2:
+                self.console.print("[yellow]Usage: /yt learn <url-or-id>[/yellow]")
+                return
+            video_id = self.yt_extractor.get_video_id(parts[1])
+            result = self.youtube.extract_and_learn(video_id)
+            if result["success"]:
+                self.console.print(f"[green]Learned from: {result['title']}[/green]")
+                self.console.print(f"[cyan]Concepts:[/cyan] {', '.join(result['concepts'][:10])}")
+            else:
+                self.console.print(f"[red]Failed: {result.get('error', 'Unknown')}[/red]")
+
+        elif cmd == "list":
+            videos = list(self.youtube._library.values())
+            if not videos:
+                self.console.print("[yellow]Library empty[/yellow]")
+                return
+            for v in videos:
+                status = "★" if v.favorite else "○"
+                watch = "✓" if v.watched else "○"
+                self.console.print(f"[{status}][{watch}] {v.title[:50]} - {v.channel}")
+
+        elif cmd == "stats":
+            stats = self.youtube.get_stats()
+            self.console.print(Panel(
+                f"**Total Videos:** {stats['total_videos']}\n"
+                f"**Watched:** {stats['watched']} ({stats['completion_rate']})\n"
+                f"**Favorites:** {stats['favorites']}\n"
+                f"**Total Time:** {stats['total_time_hours']:.1f} hours\n"
+                f"**yt-dlp Available:** {'Yes' if stats['youtube_available'] else 'No (install with: pip install yt-dlp)'}",
+                title="YouTube Library",
+                border_style="green"
+            ))
+
+        elif cmd == "export":
+            path = parts[1] if len(parts) > 1 else "youtube_library.md"
+            result = self.youtube.export_to_markdown(path)
+            self.console.print(f"[green]Exported to {result}[/green]")
+
+        else:
+            self.console.print("[cyan]/yt search|info|add|transcript|chapters|learn|list|stats|export[/cyan]")
+
+    async def _cmd_watch(self, args: str) -> None:
+        """Watch YouTube video."""
+        if not args:
+            self.console.print("[yellow]Usage: /watch <url>[/yellow]")
+            return
+        
+        video_id = self.yt_extractor.get_video_id(args)
+        video = self.yt_extractor.get_video_info(video_id)
+        
+        if video:
+            embed_url = self.yt_extractor.get_embed_url(video_id)
+            self.console.print(f"[cyan]Opening:[/cyan] {video.title}")
+            self.console.print(f"[blue]{embed_url}[/blue]")
+            
+            self.youtube.add_video(args)
+        else:
+            self.console.print("[red]Video not found[/red]")
 
     async def _cmd_run(self, args: str) -> None:
         """Run code in sandbox."""
