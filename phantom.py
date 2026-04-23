@@ -153,12 +153,22 @@ SCENARIO 1: [Name] - ATTACK: [How it breaks the conclusion]"""
         
         backends = {}
         
-        # Check Ollama
+        # Check Ollama for PHANTOM model first
         try:
             r = requests.get("http://localhost:11434/api/tags", timeout=2)
             if r.status_code == 200:
-                backends["ollama"] = r.json()
-                self.current_backend = "ollama"
+                models = r.json().get("models", [])
+                model_names = [m.get("name", "") for m in models]
+                
+                if "phantom" in model_names:
+                    backends["phantom"] = "PHANTOM 3B"
+                    self.current_backend = "phantom"
+                elif any("3b" in n.lower() for n in model_names):
+                    backends["ollama"] = "local 3B"
+                    self.current_backend = "ollama"
+                elif model_names:
+                    backends["ollama"] = "local"
+                    self.current_backend = "ollama"
         except:
             pass
         
@@ -178,9 +188,8 @@ SCENARIO 1: [Name] - ATTACK: [How it breaks the conclusion]"""
         if not self.current_backend:
             self.current_backend = "none"
             self.console.print("[yellow]Warning: No LLM backend detected[/yellow]")
-            self.console.print("[yellow]For full functionality, install Ollama or set an API key:[/yellow]")
-            self.console.print("[yellow]  - Ollama: https://ollama.ai[/yellow]")
-            self.console.print("[yellow]  - Groq: https://console.groq.com (free tier)[/yellow]")
+            self.console.print("[yellow]For full functionality, build PHANTOM 3B:[/yellow]")
+            self.console.print("[yellow]  - bash build_phantom.sh[/yellow]")
 
     def chat(self, message: str, thinking: str = "deep") -> str:
         """Chat with PHANTOM using available backend."""
@@ -204,7 +213,7 @@ SCENARIO 1: [Name] - ATTACK: [How it breaks the conclusion]"""
             return self._demo_response(message, thinking)
 
     def _chat_ollama(self, messages: list) -> str:
-        """Chat using Ollama."""
+        """Chat using Ollama with PHANTOM model."""
         import requests
         import json
         
@@ -215,14 +224,17 @@ SCENARIO 1: [Name] - ATTACK: [How it breaks the conclusion]"""
                 continue
             formatted.append({"role": role, "content": m["content"]})
         
+        # Use PHANTOM model if available, otherwise fallback
+        model = "phantom" if self.current_backend == "phantom" else "llama3.1:3b"
+        
         try:
             r = requests.post(
                 "http://localhost:11434/api/chat",
                 json={
-                    "model": "llama3",
+                    "model": model,
                     "messages": formatted,
                     "stream": False,
-                    "options": {"num_predict": 2048}
+                    "options": {"num_predict": 2048, "temperature": 0.7}
                 },
                 timeout=120
             )
@@ -538,6 +550,10 @@ To get full AI-powered responses, configure an LLM backend:
 ### LLM
 - `/backend` - Show current backend
 - `/switch <name>` - Switch LLM backend
+
+### Self-Evolution
+- `/evolve`      - Run self-evolution cycle
+- `/retrain`     - Retrain PHANTOM model
 """
         self.console.print(Panel(help_text, title="Help", border_style="cyan"))
 
@@ -549,6 +565,34 @@ To get full AI-powered responses, configure an LLM backend:
         if cmd == "/backend":
             self.console.print(f"Current: {self.current_backend}")
             self.console.print(f"Available: {self.detected_backends}")
+        
+        elif cmd == "/evolve":
+            self.console.print("[cyan]Running self-evolution cycle...[/cyan]")
+            try:
+                from core.evolution import EvolutionEngine
+                engine = EvolutionEngine()
+                report = engine.run_evolution_cycle()
+                self.console.print(f"[green]Evolution cycle {report.cycle_number} complete![/green]")
+                self.console.print(f"Entries added: {report.entries_added}")
+            except Exception as e:
+                self.console.print(f"[red]Evolution error: {e}[/red]")
+        
+        elif cmd == "/retrain":
+            self.console.print("[cyan]Running self-training...[/cyan]")
+            try:
+                from core.self_training import SelfTrainingEngine
+                trainer = SelfTrainingEngine()
+                if trainer.should_retrain():
+                    result = trainer.run_self_training()
+                    if result.success:
+                        self.console.print(f"[green]Training complete! Cycle {result.cycle_number}[/green]")
+                    else:
+                        self.console.print(f"[red]Training failed: {result.error}[/red]")
+                else:
+                    pending = trainer.get_training_status()["pending_knowledge"]
+                    self.console.print(f"Need {10 - pending} more knowledge entries to retrain")
+            except Exception as e:
+                self.console.print(f"[red]Training error: {e}[/red]")
         
         elif cmd == "/stats":
             self.console.print(Panel(
