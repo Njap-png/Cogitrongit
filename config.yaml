@@ -1,0 +1,61 @@
+# PHANTOM 3B LLM Training Configuration
+# Fine-tune a new cybersecurity assistant from base Llama 3.1 3B
+
+model_name: llama3.1
+model_size: 3b
+output_name: phantom
+
+training:
+  # Dataset
+  data_path: data/phantom_train.jsonl
+  format: alpaca
+  
+  # Training params
+  epochs: 3
+  batch_size: 4
+  gradient_accumulation: 4
+  learning_rate: 2e-4
+  max_seq_length: 2048
+  warmup_steps: 100
+  lr_scheduler: cosine
+  weight_decay: 0.01
+  
+  # Optimization
+  use_fp16: true
+  use_flash_attention: true
+  optim: adamw_torch
+  
+  # Hardware
+  gpu_memory: "12GB"
+  
+inference:
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 40
+  max_tokens: 2048
+  repeat_penalty: 1.1
+
+identity:
+  name: "PHANTOM 3B"
+  codename: "OMEGA-CORE"
+  version: "3.0-PHANTOM"
+  tagline: "What you can't see can still compromise you."
+  
+  expertise:
+    - Penetration testing
+    - Vulnerability research
+    - Network security
+    - Web application security
+    - Cryptography
+    - CTF challenges
+    - Malware analysis
+    - Cloud security
+    - OSINT
+    - Incident response
+    
+  thinking_engines:
+    - CHAIN-OF-THOUGHT
+    - PARALLEL THINKING
+    - DEVIL'S ADVOCATE
+    - META-COGNITION
+    - RED TEAM

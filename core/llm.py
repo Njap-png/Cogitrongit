@@ -93,8 +93,9 @@ class LLMBackend:
     SUPPORTED_BACKENDS = {
         "ollama": {
             "url": "http://localhost:11434",
-            "models": ["llama3.1", "llama3", "mistral", "mixtral", "codellama", "phi3", "gemma2"],
+            "models": ["phantom", "llama3.1:3b"],
             "priority": 1,
+            "default_model": "phantom",
         },
         "groq": {
             "url": "https://api.groq.com/openai/v1",
@@ -239,8 +240,17 @@ You support:
         
         if self._available_backends.get("ollama"):
             self.backend = "ollama"
-            if self._available_models.get("ollama"):
-                self.model = self._available_models["ollama"][0]
+            models = self._available_models.get("ollama", [])
+            if "phantom" in models:
+                self.model = "phantom"
+            elif "llama3.1:3b" in models:
+                self.model = "llama3.1:3b"
+            elif "phi3:3b" in models:
+                self.model = "phi3:3b"
+            elif "gemma2:2b" in models:
+                self.model = "gemma2:2b"
+            elif models:
+                self.model = models[0]
             return "ollama"
         
         if self._available_backends.get("groq"):
